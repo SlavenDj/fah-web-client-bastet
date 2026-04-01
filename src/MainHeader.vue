@@ -27,14 +27,13 @@
 -->
 
 <script>
-import MainMenu   from './MainMenu.vue'
-import TickerView from './TickerView.vue'
-
+import MainMenu from './MainMenu.vue';
+import TickerView from './TickerView.vue';
 
 export default {
-  name: 'MainHeader',
-  components: {MainMenu, TickerView},
-}
+	name: 'MainHeader',
+	components: { MainMenu, TickerView },
+};
 </script>
 
 <template lang="pug">
@@ -42,6 +41,11 @@ ViewHeader.main-header
   template(v-slot:center): slot(name="center")
 
   template(v-slot:actions)
+    // Dark Theme Toggle Button
+    Button.button-icon(@click="$root.toggle_dark()", 
+      :icon="$root.is_dark ? 'sun-o' : 'moon-o'", 
+      :title="$root.is_dark ? 'Switch to Light Theme' : 'Switch to Dark Theme'")
+
     Button.button-image(v-if="$adata.avatar", route="/account/",
       :image="$adata.avatar",
       :title="$adata.user + ': Account Settings and Logout'")

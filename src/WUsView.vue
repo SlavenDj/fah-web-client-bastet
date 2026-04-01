@@ -229,14 +229,14 @@ export default {
   MainHeader
 
   .view-body
+    // FILTER SECTION
     .filter-panel.view-panel
       .filter-panel-header(@click="filtersOpen = !filtersOpen")
         HelpBalloon.header-title(name="Work Unit Stats"): p.
           Filter Work Units to compute stats on different groups of units.
 
         .filter-panel-controls
-          .filter-summary-badge(v-if="filter_summary",
-            title="Filters active")
+          .filter-summary-badge(v-if="filter_summary", title="Filters active")
             | {{filter_summary.parts.length}} filter{{filter_summary.parts.length > 1 ? 's' : ''}} active
 
           Button.button-icon(
@@ -244,110 +244,116 @@ export default {
             :title="filtersOpen ? 'Collapse filters' : 'Expand filters'")
 
       transition(name="filter-collapse")
-        table.view-table.wu-filters(v-show="filtersOpen")
-          thead
-            tr
-              th Machine
-              th Project
-              th Core
-              th OS
-              th State
-              th Resources
-              th Within
-              th Complete
-              th.actions Actions
+        .filter-grid-wrapper(v-show="filtersOpen")
+          .filter-grid
+            .filter-group
+              label Machine
+              select(v-model="filter.machine")
+                option(value="Any") Any
+                option(v-for="machine in machines", :value="machine") {{machine}}
 
-          tbody
-            tr
-              td
-                select(v-model="filter.machine")
-                  option(value="Any") Any
-                  option(v-for="machine in machines", :value="machine") {{machine}}
+            .filter-group
+              label Project
+              select(v-model="filter.project")
+                option(value="Any") Any
+                option(v-for="project in projects", :value="project") {{project}}
 
-              td
-                select(v-model="filter.project")
-                  option(value="Any") Any
-                  option(v-for="project in projects", :value="project") {{project}}
+            .filter-group
+              label Core
+              select(v-model="filter.core")
+                option(value="Any") Any
+                option(v-for="core in cores", :value="core") {{core}}
 
-              td
-                select(v-model="filter.core")
-                  option(value="Any") Any
-                  option(v-for="core in cores", :value="core") {{core}}
+            .filter-group
+              label OS
+              select(v-model="filter.os")
+                option(value="Any") Any
+                option(v-for="os in oses", :value="os") {{os}}
 
-              td
-                select(v-model="filter.os")
-                  option(value="Any") Any
-                  option(v-for="os in oses", :value="os") {{os}}
+            .filter-group
+              label State
+              select(v-model="filter.state")
+                option(value="Any") Any
+                option(v-for="v in states", :value="v") {{v}}
 
-              td
-                select(v-model="filter.state")
-                  option(value="Any") Any
-                  option(v-for="v in states", :value="v") {{v}}
+            .filter-group
+              label Resources
+              select(v-model="filter.resources")
+                option(value="Any") Any
+                option(v-for="r in resources", :value="r") {{r}}
 
-              td
-                select(v-model="filter.resources")
-                  option(value="Any") Any
-                  option(v-for="r in resources", :value="r") {{r}}
+            .filter-group(title="Only include units assigned within this number of days.")
+              label Within (Days)
+              input(v-model="filter.days", type="number", placeholder="All time", :class="{error: !isFinite(filter.days)}")
 
-              td(title="Only include units assigned within this number of days.")
-                input(v-model="filter.days", type=number, placeholder="days",
-                  :class="{error: !isFinite(filter.days)}")
-
-              td(title="Only include completed units.")
+            .filter-group.checkbox-group(title="Only include completed units.")
+              label 
                 input(type="checkbox", v-model="filter.complete")
+                span Complete Only
 
-              td.actions
-                span
-                  Button.button-icon(icon="refresh", @click="reset",
-                    title="Reset stats filter")
+            .filter-actions
+              Button.button-reset(icon="refresh", @click="reset", title="Reset stats filter") Reset
 
       .filter-result-bar(v-if="filter_summary")
         span.filter-result-text
-          | Showing
-          strong  {{filter_summary.shown}}
-          |  of
-          strong  {{filter_summary.total}}
+          | Showing 
+          strong {{filter_summary.shown}}
+          |  of 
+          strong {{filter_summary.total}}
           |  work units
           template(v-if="filter_summary.parts.length")
-            |  &mdash; filtered by
-            em  {{filter_summary.parts.join(', ')}}
-        Button.button-icon(icon="times", @click="reset",
-          title="Clear all filters")
+            |  &mdash; filtered by 
+            em {{filter_summary.parts.join(', ')}}
+        Button.button-icon(icon="times", @click="reset", title="Clear all filters")
 
-    p(v-if="!wus.length") No matching work units.
-    table.view-table.wu-stats(v-else)
-      thead
-        tr
-          th
-          th Average
-          th Min
-          th Max
+    // STATS SECTION
+    .empty-state(v-if="!wus.length")
+      p No work units match your current filters.
+      Button(v-if="filter_summary", @click="reset", icon="refresh") Clear Filters
+    
+    .view-panel(v-else)
+      table.view-table.wu-stats
+        thead
+          tr
+            th
+            th Average
+            th Min
+            th Max
 
-      tbody
-        tr(title="Time Per Frame.  Time to complete 1% of the unit.")
-          th TPF
-          td {{tpf_avg}}
-          td {{tpf_min}}
-          td {{tpf_max}}
+        tbody
+          tr(title="Time Per Frame.  Time to complete 1% of the unit.")
+            th TPF
+            td {{tpf_avg}}
+            td {{tpf_min}}
+            td {{tpf_max}}
 
-        tr(title="Points Per Day")
-          th PPD
-          td {{ppd_avg}}
-          td {{ppd_min}}
-          td {{ppd_max}}
+          tr(title="Points Per Day")
+            th PPD
+            td {{ppd_avg}}
+            td {{ppd_min}}
+            td {{ppd_max}}
 
-    HelpBalloon.header-title(name="Recent Work Unit History"): p.
+    // HISTORY SECTION
+    HelpBalloon.header-title.mt-section(name="Recent Work Unit History"): p.
       A log of recent work WUs completed by your machines.
 
     .units-view(:style="Unit.get_column_grid_style(columns, ' 1fr')")
       UnitHeaders(:columns="columns") Info
 
       UnitsView(:units="wus", :columns="columns", v-slot="{unit}")
-        Button.button-icon(icon="info-circle",
-          :route="`/unit/${unit.id}`", title="View Work Unit details")</template>
+        Button.button-icon(icon="info-circle", :route="`/unit/${unit.id}`", title="View Work Unit details")
+</template>
 
 <style lang="stylus">
 .wus-view
+  .view-body
+    display flex
+    flex-direction column
+    gap var(--gap)
+
+  .mt-section
+    margin-top calc(var(--gap) * 2)
+
   .filter-panel
     padding 0
     overflow hidden
@@ -359,6 +365,7 @@ export default {
       padding var(--gap) calc(var(--gap) * 1.5)
       cursor pointer
       user-select none
+      transition background-color 0.2s ease
 
       &:hover
         background var(--table-header-bg)
@@ -370,34 +377,85 @@ export default {
 
       .filter-summary-badge
         font-size 11px
-        padding 2px 8px
-        border-radius var(--border-radius)
+        padding 4px 8px
+        border-radius 12px
         background var(--highlight-color)
         color var(--body-bg)
         font-weight bold
         white-space nowrap
 
-    .wu-filters
-      td
-        padding 0
-        select, input
+    .filter-grid-wrapper
+      border-top 1px solid var(--table-border-color, rgba(0,0,0,0.05))
+
+    .filter-grid
+      display grid
+      grid-template-columns repeat(auto-fill, minmax(140px, 1fr))
+      gap var(--gap)
+      padding calc(var(--gap) * 1.5)
+      background var(--element-bg, transparent)
+
+      .filter-group
+        display flex
+        flex-direction column
+        gap 4px
+
+        label
+          font-size 0.75rem
+          font-weight bold
+          text-transform uppercase
+          color var(--subtitle-color)
+          letter-spacing 0.5px
+
+        select, input[type="number"]
           width 100%
-          border-radius 0
+          padding 6px 8px
+          border 1px solid var(--input-border, #ccc)
+          border-radius 4px
+          background var(--input-bg, #fff)
+          color var(--input-fg, inherit)
+          transition border-color 0.2s ease
 
-      .actions
-        text-align center
+          &:focus
+            outline none
+            border-color var(--highlight-color)
 
-      td.actions
-        padding 0 var(--gap)
+          &.error
+            border-color #e74c3c
+
+      .checkbox-group
+        justify-content flex-end
+        padding-bottom 6px
+
+        label
+          display flex
+          align-items center
+          gap 8px
+          cursor pointer
+          text-transform none
+          font-size 0.9rem
+          color var(--body-fg)
+
+          input[type="checkbox"]
+            width 16px
+            height 16px
+            cursor pointer
+
+      .filter-actions
+        display flex
+        align-items flex-end
+
+        .button-reset
+          width 100%
+          justify-content center
 
     .filter-result-bar
       display flex
       align-items center
       justify-content space-between
-      padding calc(var(--gap) / 2) calc(var(--gap) * 1.5)
+      padding calc(var(--gap) * 0.75) calc(var(--gap) * 1.5)
       border-top var(--table-border)
       background var(--table-header-bg)
-      font-size 90%
+      font-size 0.9rem
       color var(--subtitle-color)
 
       strong
@@ -406,12 +464,29 @@ export default {
       em
         font-style normal
         color var(--body-fg)
+        font-weight 500
+
+  .empty-state
+    display flex
+    flex-direction column
+    align-items center
+    justify-content center
+    padding calc(var(--gap) * 4) var(--gap)
+    background var(--table-header-bg)
+    border-radius var(--border-radius, 8px)
+    text-align center
+    color var(--subtitle-color)
+    gap var(--gap)
+
+    p
+      margin 0
+      font-size 1.1rem
 
   .filter-collapse-enter-active,
   .filter-collapse-leave-active
-    transition max-height 0.2s ease, opacity 0.15s ease
+    transition max-height 0.3s ease-in-out, opacity 0.2s ease
     overflow hidden
-    max-height 200px
+    max-height 600px // increased to accommodate flex wrapping on mobile
 
   .filter-collapse-enter-from,
   .filter-collapse-leave-to

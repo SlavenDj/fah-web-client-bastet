@@ -27,269 +27,294 @@
 -->
 
 <script>
-import CommonSettings from './CommonSettings.vue'
-import GroupSettings  from './GroupSettings.vue'
-
+import CommonSettings from './CommonSettings.vue';
+import GroupSettings from './GroupSettings.vue';
 
 function copy_keys(config, keys) {
-  let copy = {}
+	let copy = {};
 
-  for (let key of keys)
-    copy[key] = config[key]
+	for (let key of keys) copy[key] = config[key];
 
-  return copy
+	return copy;
 }
-
 
 export default {
-  props: ['mach'],
-  components: {CommonSettings, GroupSettings},
-
-
-  data() {
-    return {
-      name:            this.mach.get_name(),
-      initial_config:  undefined,
-      config:          undefined,
-      group:           '',
-      new_group:       '',
-      confirmed:       false,
-      unlocked:        this.$util.retrieve_bool('fah-settings-unlocked'),
-
-      confirm_dialog_buttons: [
-        {name: 'cancel',  icon: 'times'},
-        {name: 'discard', icon: 'trash'},
-        {name: 'save',    icon: 'floppy-o'}
-      ],
-    }
-  },
-
-
-  watch: {
-    'data.config'() {this.init()}
-  },
-
-
-  computed: {
-    logged_in() {return this.$account.logged_in},
-    connected()    {return this.mach.is_connected()},
-    linked()       {return this.mach.is_linked()},
-    valid_name()   {return /^[\w\.-]{1,64}$/.test(this.name)},
-
-    advanced() {
-      if (this.unlocked) return true
-
-      let config = this.config || {}
-
-      for (let [name, group] of Object.entries(config.groups || {}))
-        if (name || group.key || group.beta) return true
-
-      return false
-    },
-
-
-    keys() {
-      let keys = ['on_idle', 'cpus', 'gpus', 'beta', 'key']
-
-      if (!this.logged_in)
-        return keys.concat(['user', 'team', 'passkey', 'cause'])
-
-      return keys
-    },
-
-
-    info()    {return this.mach.get_info()},
-    data()    {return this.mach.get_data()},
-    groups()  {return (this.config || {}).groups || {}},
-    version() {return this.mach.get_version()},
-
-
-    name_modified() {return this.name != this.mach.get_name()},
-
-
-    config_modified() {
-      return !this.$util.isEqual(this.initial_config, this.config)
-    },
-
-
-    modified() {
-      if (!this.valid_name) return false
-      if (!(this.$refs.common || {valid: true}).valid) return false
-      if (this.name_modified) return true
-      if (!this.config) return false
-      return this.config_modified
-    },
-
-
-    available_cpus() {return this.info ? this.info.cpus : 0},
-    available_gpus() {return this.info ? this.info.gpus : {}},
-
-
-    gpus() {
-      let gpus = []
-
-      for (const [id, info] of Object.entries(this.available_gpus))
-        gpus.push(Object.assign({id, supported: true}, info))
-
-      return gpus
-    }
-  },
-
-
-  beforeRouteLeave(to, from) {
-    if (!this.modified || this.confirmed) return true
-
-    this.$refs.confirm_dialog.exec().then(response => {
-      switch (response) {
-      case 'save': return this.save()
-
-      case 'discard':
-        this.confirmed = true
-        this.$router.push(to)
-      }
-    })
-
-    return false
-  },
-
-
-  mounted() {this.init()},
-
-
-  methods: {
-    async link() {
-      this.mach.set_name(this.name)
-      this.mach.link(this.$adata.token)
-    },
-
-
-    async unlink() {
-      let response = await this.$root.message('confirm', 'Unlink machine?',
-        '<p>If you unlink this machine you will lose remote access.</p>' +
-        '<p>Are you sure you want to unlink?', ['no', 'yes'])
-      if (response != 'yes') return
-      await this.mach.unlink()
-      await this.$account.update()
-      this.$router.back()
-    },
-
-
-    get_group_config(config) {
-      let keys = ['on_idle', 'cpus', 'gpus', 'beta', 'key', 'cuda', 'hip']
-      let copy = copy_keys(config, keys)
-
-      copy.on_idle = !!copy.on_idle
-      copy.cpus    = copy.cpus || 0
-      copy.beta    = !!copy.beta
-      copy.key     = copy.key || 0
-      copy.cuda    = copy.cuda == undefined ? true : copy.cuda
-      copy.hip     = copy.hip  == undefined ? true : copy.hip
-
-      if (this.$util.version_less('8.3.1', this.version)) {
-        copy.on_battery = !!config.on_battery
-        copy.keep_awake = !!config.keep_awake
-      }
-
-      let config_gpus = config.gpus || {}
-      copy.gpus = {}
-      for (let id in this.available_gpus) {
-        const enabled = (config_gpus[id] || {}).enabled || false
-        copy.gpus[id] = {enabled}
-      }
-
-      // Add GPUs which are enabled but not detected
-      for (const [id, gpu] of Object.entries(config_gpus))
-        if (gpu.enabled && !copy.gpus[id]) copy.gpus[id] = {enabled: true}
-
-      return copy
-    },
-
-
-    get_account_config(config) {
-      let copy = copy_keys(config, ['user', 'team', 'passkey', 'cause'])
-
-      if (!copy.cause || copy.cause == 'unspecified') copy.cause = 'any'
-      copy.cause = copy.cause.toLowerCase()
-
-      return copy
-    },
-
-
-    init() {
-      let config = this.data.config
-      if (this.config || !config || this.$util.isEmpty(config)) return
-
-      config = this.logged_in ? {} : this.get_account_config(config)
-
-      if (!this.data.groups)
-        config.groups = {'': this.get_group_config(config)}
-
-      else {
-        config.groups = {}
-
-        for (const [name, group] of Object.entries(this.data.groups))
-          config.groups[name] = this.get_group_config(group.config)
-      }
-
-      this.config = config
-      this.initial_config = this.$util.deepCopy(this.config)
-    },
-
-
-    async save() {
-      if (this.name_modified)   await this.mach.save_name(this.name)
-      if (this.config_modified) await this.mach.configure(this.config)
-      this.close()
-    },
-
-
-    cancel() {this.close()},
-
-
-    close() {
-      this.confirmed = true
-      this.$router.back()
-    },
-
-
-    async add_group() {
-      this.new_group = ''
-      let result = await this.$refs.new_group_dialog.exec()
-      if (result != 'create') return
-
-      let name = this.new_group.trim()
-      if (!(name in this.config.groups))
-        this.config.groups[name] = this.get_group_config({})
-
-      this.group = name
-    },
-
-
-    async del_group() {
-      let result = await this.$root.message(
-        'confirm', 'Delete Resource Group?', 'Are you sure you want to ' +
-          ' delete resource group "' + this.group + '"?', 'Cancel Delete')
-
-      if (result != 'delete') return
-
-      delete this.config.groups[this.group]
-      this.group = ''
-    },
-
-
-    async unlock() {
-      let result = await this.$root.message(
-        'confirm', 'Unlock Advanced Settings?', '<p>Advanced settings are ' +
-          'mainly used for testing Folding@home.</p><p>Are you sure you ' +
-          'want to unlock advanced settings?</p>', 'Cancel Unlock')
-
-      if (result != 'unlock') return
-
-      this.unlocked = true
-      this.$util.store_bool('fah-settings-unlocked', true)
-    }
-  }
-}
+	props: ['mach'],
+	components: { CommonSettings, GroupSettings },
+
+	data() {
+		return {
+			name: this.mach.get_name(),
+			initial_config: undefined,
+			config: undefined,
+			group: '',
+			new_group: '',
+			confirmed: false,
+			unlocked: this.$util.retrieve_bool('fah-settings-unlocked'),
+
+			confirm_dialog_buttons: [
+				{ name: 'cancel', icon: 'times' },
+				{ name: 'discard', icon: 'trash' },
+				{ name: 'save', icon: 'floppy-o' },
+			],
+		};
+	},
+
+	watch: {
+		'data.config'() {
+			this.init();
+		},
+	},
+
+	computed: {
+		logged_in() {
+			return this.$account.logged_in;
+		},
+		connected() {
+			return this.mach.is_connected();
+		},
+		linked() {
+			return this.mach.is_linked();
+		},
+		valid_name() {
+			return /^[\w\.-]{1,64}$/.test(this.name);
+		},
+
+		advanced() {
+			if (this.unlocked) return true;
+
+			let config = this.config || {};
+
+			for (let [name, group] of Object.entries(config.groups || {}))
+				if (name || group.key || group.beta) return true;
+
+			return false;
+		},
+
+		keys() {
+			let keys = ['on_idle', 'cpus', 'gpus', 'beta', 'key'];
+
+			if (!this.logged_in)
+				return keys.concat(['user', 'team', 'passkey', 'cause']);
+
+			return keys;
+		},
+
+		info() {
+			return this.mach.get_info();
+		},
+		data() {
+			return this.mach.get_data();
+		},
+		groups() {
+			return (this.config || {}).groups || {};
+		},
+		version() {
+			return this.mach.get_version();
+		},
+
+		name_modified() {
+			return this.name != this.mach.get_name();
+		},
+
+		config_modified() {
+			return !this.$util.isEqual(this.initial_config, this.config);
+		},
+
+		modified() {
+			if (!this.valid_name) return false;
+			if (!(this.$refs.common || { valid: true }).valid) return false;
+			if (this.name_modified) return true;
+			if (!this.config) return false;
+			return this.config_modified;
+		},
+
+		available_cpus() {
+			return this.info ? this.info.cpus : 0;
+		},
+		available_gpus() {
+			return this.info ? this.info.gpus : {};
+		},
+
+		gpus() {
+			let gpus = [];
+
+			for (const [id, info] of Object.entries(this.available_gpus))
+				gpus.push(Object.assign({ id, supported: true }, info));
+
+			return gpus;
+		},
+	},
+
+	beforeRouteLeave(to, from) {
+		if (!this.modified || this.confirmed) return true;
+
+		this.$refs.confirm_dialog.exec().then((response) => {
+			switch (response) {
+				case 'save':
+					return this.save();
+
+				case 'discard':
+					this.confirmed = true;
+					this.$router.push(to);
+			}
+		});
+
+		return false;
+	},
+
+	mounted() {
+		this.init();
+	},
+
+	methods: {
+		async link() {
+			this.mach.set_name(this.name);
+			this.mach.link(this.$adata.token);
+		},
+
+		async unlink() {
+			let response = await this.$root.message(
+				'confirm',
+				'Unlink machine?',
+				'<p>If you unlink this machine you will lose remote access.</p>' +
+					'<p>Are you sure you want to unlink?',
+				['no', 'yes'],
+			);
+			if (response != 'yes') return;
+			await this.mach.unlink();
+			await this.$account.update();
+			this.$router.back();
+		},
+
+		get_group_config(config) {
+			let keys = [
+				'on_idle',
+				'cpus',
+				'gpus',
+				'beta',
+				'key',
+				'cuda',
+				'hip',
+			];
+			let copy = copy_keys(config, keys);
+
+			copy.on_idle = !!copy.on_idle;
+			copy.cpus = copy.cpus || 0;
+			copy.beta = !!copy.beta;
+			copy.key = copy.key || 0;
+			copy.cuda = copy.cuda == undefined ? true : copy.cuda;
+			copy.hip = copy.hip == undefined ? true : copy.hip;
+
+			if (this.$util.version_less('8.3.1', this.version)) {
+				copy.on_battery = !!config.on_battery;
+				copy.keep_awake = !!config.keep_awake;
+			}
+
+			let config_gpus = config.gpus || {};
+			copy.gpus = {};
+			for (let id in this.available_gpus) {
+				const enabled = (config_gpus[id] || {}).enabled || false;
+				copy.gpus[id] = { enabled };
+			}
+
+			// Add GPUs which are enabled but not detected
+			for (const [id, gpu] of Object.entries(config_gpus))
+				if (gpu.enabled && !copy.gpus[id])
+					copy.gpus[id] = { enabled: true };
+
+			return copy;
+		},
+
+		get_account_config(config) {
+			let copy = copy_keys(config, ['user', 'team', 'passkey', 'cause']);
+
+			if (!copy.cause || copy.cause == 'unspecified') copy.cause = 'any';
+			copy.cause = copy.cause.toLowerCase();
+
+			return copy;
+		},
+
+		init() {
+			let config = this.data.config;
+			if (this.config || !config || this.$util.isEmpty(config)) return;
+
+			config = this.logged_in ? {} : this.get_account_config(config);
+
+			if (!this.data.groups)
+				config.groups = { '': this.get_group_config(config) };
+			else {
+				config.groups = {};
+
+				for (const [name, group] of Object.entries(this.data.groups))
+					config.groups[name] = this.get_group_config(group.config);
+			}
+
+			this.config = config;
+			this.initial_config = this.$util.deepCopy(this.config);
+		},
+
+		async save() {
+			if (this.name_modified) await this.mach.save_name(this.name);
+			if (this.config_modified) await this.mach.configure(this.config);
+			this.close();
+		},
+
+		cancel() {
+			this.close();
+		},
+
+		close() {
+			this.confirmed = true;
+			this.$router.back();
+		},
+
+		async add_group() {
+			this.new_group = '';
+			let result = await this.$refs.new_group_dialog.exec();
+			if (result != 'create') return;
+
+			let name = this.new_group.trim();
+			if (!(name in this.config.groups))
+				this.config.groups[name] = this.get_group_config({});
+
+			this.group = name;
+		},
+
+		async del_group() {
+			let result = await this.$root.message(
+				'confirm',
+				'Delete Resource Group?',
+				'Are you sure you want to ' +
+					' delete resource group "' +
+					this.group +
+					'"?',
+				'Cancel Delete',
+			);
+
+			if (result != 'delete') return;
+
+			delete this.config.groups[this.group];
+			this.group = '';
+		},
+
+		async unlock() {
+			let result = await this.$root.message(
+				'confirm',
+				'Unlock Advanced Settings?',
+				'<p>Advanced settings are ' +
+					'mainly used for testing Folding@home.</p><p>Are you sure you ' +
+					'want to unlock advanced settings?</p>',
+				'Cancel Unlock',
+			);
+
+			if (result != 'unlock') return;
+
+			this.unlocked = true;
+			this.$util.store_bool('fah-settings-unlocked', true);
+		},
+	},
+};
 </script>
 
 <template lang="pug">
