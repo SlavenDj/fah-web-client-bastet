@@ -28,185 +28,226 @@
 
 <script>
 export default {
-  name: 'LogView',
-  props: ['mach', 'query'],
+	name: 'LogView',
+	props: ['mach', 'query'],
 
+	data() {
+		return {
+			search: '',
+			errors: false,
+			warnings: false,
+			follow: true,
+			line_height: 20, // Fallback default
+			view_height: 0,
+			scroll_percent: 0,
+			log_top: 0,
+			top_line: 0,
+			resizeObserver: null,
+			scroll_raf: null,
+			fade_timer: null,
+		};
+	},
 
-  data() {
-    return {
-      search: '',
-      errors: false,
-      warnings: false,
-      follow: true,
-      line_height: 0,
-      view_height: 0,
-      scroll_percent: 0,
-      log_top: 0,
-      scroll_ratio: 0,
-      top_line: 0
-    }
-  },
+	watch: {
+		count() {
+			// Use nextTick to allow DOM update before calculating scroll end
+			this.$nextTick(() => {
+				if (this.follow) this.scroll_to_end();
+				else this.update_scroll();
+			});
+		},
+		follow(val) {
+			if (val) this.scroll_to_end();
+		},
+		query(newQuery) {
+			if (newQuery !== undefined) this.search = newQuery;
+		},
+	},
 
+	computed: {
+		count() {
+			return this.lines.length;
+		},
 
-  watch: {
-    count()  {this.update()},
-    follow() {this.scroll_to_end()}
-  },
+		visible_lines() {
+			return this.lines
+				.slice(this.start, this.end)
+				.map((line) => [line[0], this.$util.ansi2html(line[1])]);
+		},
 
+		log() {
+			let log = this.mach.get_data().log || [];
+			return log.map((line, index) => [index, line]);
+		},
 
-  computed: {
-    count() {return this.lines.length},
+		line_filter() {
+			let searchExp = null;
+			if (this.search) {
+				// Safely escape user input for Regex
+				const escapedSearch = this.search.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					'\\$&',
+				);
+				searchExp = new RegExp(escapedSearch, 'i');
+			}
 
+			let errWarnExp = null;
+			if (this.errors || this.warnings) {
+				errWarnExp = new RegExp(
+					':[' +
+						(this.errors ? 'E' : '') +
+						(this.warnings ? 'W' : '') +
+						'] :',
+				);
+			}
 
-    visible_lines() {
-      let lines = this.lines.slice(this.start, this.end)
-      return lines.map(line => [line[0], this.$util.ansi2html(line[1])])
-    },
+			return (lineText) => {
+				if (searchExp && !searchExp.test(lineText)) return false;
+				if (errWarnExp && !errWarnExp.test(lineText)) return false;
+				return true;
+			};
+		},
 
+		lines() {
+			if (!this.search && !this.errors && !this.warnings) return this.log;
+			return this.log.filter((line) => this.line_filter(line[1]));
+		},
 
-    log() {
-      let log = this.mach.get_data().log || []
-      let count = 0
-      return log.map(line => [count++, line])
-    },
+		start() {
+			// Buffer a few lines above for smoother scrolling
+			return Math.max(0, this.top_line - 5);
+		},
 
+		end() {
+			// Buffer lines below to prevent white space while scrolling fast
+			return Math.min(this.count, this.top_line + this.view_lines + 10);
+		},
 
-    lines() {
-      let lines = this.log
+		view_lines() {
+			return this.line_height
+				? Math.ceil(this.view_height / this.line_height)
+				: 0;
+		},
 
-      if (this.match_exp)
-        lines = lines.filter(line => line[1].match(this.match_exp))
+		wrapper_height() {
+			return this.line_height * this.count;
+		},
 
-      return lines
-    },
+		content_offset() {
+			return this.start * this.line_height;
+		},
+	},
 
+	mounted() {
+		this.search = this.query || '';
+		this.mach.log_enable(true);
 
-    match_exp() {
-      try {
-        let exp = new RegExp(this.search, 'i')
+		this.calculate_dimensions();
 
-        if (this.errors || this.warnings) {
-          let exp2 = new RegExp(':[' + (this.errors ? 'E' : '') +
-                                (this.warnings ? 'W' : '') + '] :')
-          return {[Symbol.match](s) {return s.match(exp) && s.match(exp2)}}
-        }
+		// Observe resizing dynamically
+		this.resizeObserver = new ResizeObserver(() => {
+			this.calculate_dimensions();
+			this.update_scroll();
+		});
 
-        return exp
+		if (this.$refs.log) {
+			this.resizeObserver.observe(this.$refs.log);
+		}
 
-      } catch (e) {console.log(e)}
-    },
+		this.update();
+	},
 
+	unmounted() {
+		this.mach.log_enable(false);
+		if (this.resizeObserver) this.resizeObserver.disconnect();
+		if (this.scroll_raf) cancelAnimationFrame(this.scroll_raf);
+		if (this.fade_timer) clearTimeout(this.fade_timer);
+	},
 
-    start() {
-      let s = Math.min(Math.max(this.top_line - this.view_lines, 0), this.count)
-      console.log('start', s)
-      return s
-    },
+	methods: {
+		calculate_dimensions() {
+			let log = this.$refs.log;
+			if (!log) return;
 
+			this.view_height = log.clientHeight;
 
-    end() {return Math.min(this.top_line + this.view_lines * 2, this.count)},
-    view_lines()     {return Math.floor(this.view_height / this.line_height)},
-    wrapper_height() {return Math.min(2000000, this.line_height * this.count)},
+			// Compute actual line-height
+			let e = document.createElement('div');
+			e.className = 'log-line';
+			e.innerHTML = '&nbsp;';
+			e.style.visibility = 'hidden';
+			e.style.position = 'absolute';
+			log.appendChild(e);
+			this.line_height = e.getBoundingClientRect().height || 20;
+			log.removeChild(e);
+		},
 
+		reset() {
+			this.search = '';
+			this.errors = this.warnings = false;
+		},
 
-    content_offset() {
-      if (this.end - this.start <= this.view_lines) return 0
-      let lineOffset = (this.top_line - this.start + 1)
-      let offset = this.log_top - lineOffset * this.line_height
-      let max = this.wrapper_height - (this.end - this.start) * this.line_height
-      return Math.min(Math.max(offset, 0), max)
-    }
-  },
+		update() {
+			this.$nextTick(() => {
+				if (this.follow) this.scroll_to_end();
+				this.update_scroll();
+			});
+		},
 
+		scroll_to_end() {
+			let log = this.$refs.log;
+			if (log) {
+				log.scrollTop = log.scrollHeight;
+				this.update_scroll();
+			}
+		},
 
-  mounted()   {
-    this.search = this.query
-    this.mach.log_enable(true)
+		update_scroll() {
+			let log = this.$refs.log;
+			if (!log) return;
 
-    // Compute log height
-    let log = this.$refs.log
-    let style = window.getComputedStyle(log)
-    this.view_height = parseInt(style.getPropertyValue('height'))
+			this.log_top = log.scrollTop;
+			const maxScroll = Math.max(0, log.scrollHeight - log.clientHeight);
 
-    // Compute line-height
-    let e = document.createElement('div')
-    e.classList.add('log-line')
-    e.innerHTML = 'X'
-    log.appendChild(e)
-    this.line_height = e.getBoundingClientRect().height
-    log.removeChild(e)
+			// Snap to follow if within 10px of bottom (handles floating point/zoom rounding errors)
+			if (maxScroll > 0) {
+				this.follow = maxScroll - this.log_top <= 10;
+			}
 
-    this.update()
-  },
+			this.top_line = Math.floor(this.log_top / this.line_height);
 
+			let percent =
+				maxScroll > 0
+					? Math.floor((this.log_top / maxScroll) * 100)
+					: 100;
 
-  unmounted() {this.mach.log_enable(false)},
+			// Compute scroll percent for display overlay
+			if (
+				this.scroll_percent !== percent &&
+				!(this.scroll_percent === 0 && percent === 100)
+			) {
+				this.scroll_percent = percent;
 
+				clearTimeout(this.fade_timer);
+				if (this.$refs.percent) {
+					this.$refs.percent.classList.remove('fade-out');
+					this.fade_timer = setTimeout(() => {
+						if (this.$refs.percent)
+							this.$refs.percent.classList.add('fade-out');
+					}, 800);
+				}
+			}
+		},
 
-  methods: {
-    reset() {
-      this.search = ''
-      this.errors = this.warnings = false
-    },
-
-
-    update() {
-      this.$nextTick(() => {
-        this.scroll_to_end()
-        this.update_scroll()
-      })
-    },
-
-
-    scroll_to_end() {
-      if (!this.follow) return
-      let log = this.$refs.log
-      log.scrollTop = log.scrollHeight
-      this.update_scroll()
-    },
-
-
-    update_scroll() {
-      let log  = this.$refs.log
-      let wrap = this.$refs.wrap
-      if (!log || !wrap) return this.log_top = this.top_line = 0
-
-      let height   = wrap.getBoundingClientRect().height
-      this.log_top = log.scrollTop
-
-      this.scroll_ratio = Math.max(0,
-        Math.min(this.log_top / (height - this.view_height), 1))
-
-      let top = Math.floor((this.count - this.view_lines) * this.scroll_ratio)
-      this.top_line = Math.min(Math.max(top, 0), this.count)
-
-      this.follow = 1.0 == this.scroll_ratio
-    },
-
-
-    scroll() {
-      let percent = Math.floor(100 * this.scroll_ratio)
-
-      // Compute scroll percent for display
-      if (this.scroll_percent != percent &&
-        !(this.scroll_percent == 0 && percent == 100)) {
-        this.scroll_percent = percent
-
-        clearTimeout(this.fade_timer)
-        this.$refs.percent.classList.remove('fade-out')
-        this.fade_timer = setTimeout(() => {
-          this.$refs.percent.classList.add('fade-out')
-        }, 100)
-      }
-
-      if (this.timer == undefined)
-        this.timer = setTimeout(() => {
-          this.timer = undefined
-          this.update_scroll()
-        }, 250)
-    }
-  }
-}
+		scroll() {
+			// Use requestAnimationFrame for fluid 60fps virtualization updates
+			if (this.scroll_raf) cancelAnimationFrame(this.scroll_raf);
+			this.scroll_raf = requestAnimationFrame(() => {
+				this.update_scroll();
+			});
+		},
+	},
+};
 </script>
 
 <template lang="pug">
@@ -216,12 +257,14 @@ export default {
   .view-body
     .view-panel.log-controls
       label Search
-      input(v-model="search", type="text")
+      input(v-model="search", type="text", placeholder="Search in log...")
       label(title="Filter log for error messages").
         #[input(v-model="errors", type="checkbox")] Errors
       label(title="Filter log for warning messages").
         #[input(v-model="warnings", type="checkbox")] Warnings
-      Button.button-icon(title="Reset search", icon="repeat", @click="reset")
+      
+      Button.button-icon(title="Reset search", icon="repeat", @click="reset", :disabled="!search && !errors && !warnings")
+      Button.button-icon(title="Auto-scroll to latest log entries", :icon="follow ? 'toggle-down' : 'pause'", @click="follow = !follow", :class="{ 'active-follow': follow }")
 
     .log-percent.fade-out(ref="percent")
       div {{scroll_percent}}%
@@ -230,10 +273,9 @@ export default {
       .log-line(v-if="!log.length") Loading log...
       .log-line(v-else-if="!count") No matching log lines.
 
-      .log-wrapper(v-else, ref="wrap",
-        :style="{height: wrapper_height + 'px'}")
+      .log-wrapper(v-else, ref="wrap", :style="{height: wrapper_height + 'px'}")
         .log-content(:style="{'padding-top': content_offset + 'px'}")
-          .log-line(v-for="line in visible_lines", v-html="line[1]")
+          .log-line(v-for="line in visible_lines", :key="line[0]", v-html="line[1]")
 </template>
 
 <style lang="stylus">
@@ -255,6 +297,9 @@ export default {
       input[type=text]
         flex 1
 
+      .active-follow
+        color var(--link-color)
+
     .log-percent
       position absolute
       left 10%
@@ -275,6 +320,7 @@ export default {
       flex 1
       overflow auto
       padding var(--gap)
+      will-change scroll-position
 
       .log-line
         white-space nowrap
