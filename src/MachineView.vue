@@ -27,93 +27,131 @@
 -->
 
 <script>
-import MachineGroup from './MachineGroup.vue'
-import Unit         from './unit.js'
-
+import MachineGroup from './MachineGroup.vue';
+import Unit from './unit.js';
 
 export default {
-  name: 'MachineView',
-  props: ['mach'],
-  components: {MachineGroup},
+	name: 'MachineView',
+	props: ['mach'],
+	components: { MachineGroup },
 
+	computed: {
+		loading() {
+			return !this.connected && this.$node.is_loading();
+		},
+		title() {
+			if (!this.connected) return 'Disconnected';
+		},
+		one_group() {
+			return this.mach.get_groups().length == 1;
+		},
+		connected() {
+			return this.mach.is_connected();
+		},
+		groups() {
+			return this.mach.get_groups();
+		},
+		info() {
+			return this.mach.get_info();
+		},
+		version() {
+			return this.info.version;
+		},
+		units() {
+			return this.mach.get_units();
+		},
+		no_work() {
+			return !this.units.length;
+		},
 
-  computed: {
-    loading()   {return !this.connected && this.$node.is_loading()},
-    title()     {if (!this.connected) return 'Disconnected'},
-    one_group() {return this.mach.get_groups().length == 1},
-    connected() {return this.mach.is_connected()},
-    groups()    {return this.mach.get_groups()},
-    info()      {return this.mach.get_info()},
-    version()   {return this.info.version},
-    units()     {return this.mach.get_units()},
-    no_work()   {return !this.units.length},
+		show_units() {
+			return (
+				this.connected &&
+				!this.outdated &&
+				(!this.no_work || !this.one_group)
+			);
+		},
 
+		failed() {
+			return this.one_group && this.mach.get_group().failed;
+		},
+		warn() {
+			return this.one_group && 1 < this.mach.get_group().failed_wus;
+		},
 
-    show_units() {
-      return this.connected && !this.outdated &&
-        (!this.no_work || !this.one_group)
-    },
+		status() {
+			let l = [];
 
+			if (this.loading) l.push(['Loading...']);
+			else if (!this.connected) l.push(['Disconnected']);
+			else {
+				if (this.outdated)
+					l.push(['Outdated', 'Client version too old']);
+				if (this.unlinked)
+					l.push(['Unlinked', 'Machine not linked to F@H account']);
+				if (this.no_work)
+					l.push(['No work', 'Start folding to download work']);
+			}
+			if (this.failed) l.push(['Failed', this.failed]);
+			if (this.warn)
+				l.push(['Warning', 'Check log for errors and warnings']);
 
-    failed() {return this.one_group && this.mach.get_group().failed},
-    warn() {return this.one_group && 1 < this.mach.get_group().failed_wus},
+			return l;
+		},
 
+		columns() {
+			return this.$account.get_columns();
+		},
 
-    status() {
-      let l = []
+		klass() {
+			return (
+				(this.connected ? '' : 'disconnected') +
+				(this.show_units ? '' : ' empty') +
+				(this.failed ? ' error' : '') +
+				(this.warn ? ' warn' : '')
+			);
+		},
 
-      if (this.loading) l.push(['Loading...'])
-      else if (!this.connected) l.push(['Disconnected'])
-      else {
-        if (this.outdated) l.push(['Outdated', 'Client version too old'])
-        if (this.unlinked)
-          l.push(['Unlinked', 'Machine not linked to F@H account'])
-        if (this.no_work)  l.push(['No work', 'Start folding to download work'])
-      }
-      if (this.failed) l.push(['Failed',  this.failed])
-      if (this.warn)   l.push(['Warning', 'Check log for errors and warnings'])
+		unit_style() {
+			return Unit.get_column_grid_style(this.columns, ' 1fr');
+		},
 
-      return l
-    },
+		outdated() {
+			return (
+				this.version && this.$util.version_less(this.version, '8.3.0')
+			);
+		},
 
+		unlinked() {
+			let aid = this.mach.get_info().account;
+			return this.$adata.id ? aid != this.$adata.id : !aid;
+		},
+	},
 
-    columns() {return this.$account.get_columns()},
+	methods: {
+		async pause(group) {
+			let state = await this.$root.confirm_pause();
 
+			if (state == 'pause' || state == 'finish' || state == 'fold')
+				this.mach.set_state(state, group);
+		},
 
-    klass() {
-      return (this.connected ? '' : 'disconnected') +
-        (this.show_units ? '' : ' empty') +
-        (this.failed ? ' error' : '') + (this.warn ? ' warn' : '')
-    },
-
-
-    unit_style() {return Unit.get_column_grid_style(this.columns, ' 1fr')},
-
-
-    outdated()  {
-      return this.version && this.$util.version_less(this.version, '8.3.0')
-    },
-
-
-    unlinked() {
-      let aid = this.mach.get_info().account
-      return this.$adata.id ? aid != this.$adata.id : !aid
-    }
-  },
-
-
-  methods: {
-    async pause(group) {
-      let state = await this.$root.confirm_pause()
-
-      if (state == 'pause' || state == 'finish' || state == 'fold')
-        this.mach.set_state(state, group)
-    },
-
-
-    async fold(group) {return this.mach.set_state('fold', group)},
-  }
-}
+		async fold(group) {
+			return this.mach.set_state('fold', group);
+		},
+		status_badge_class(label) {
+			const l = label.toLowerCase();
+			if (l === 'failed') return 'status-badge status-badge--error';
+			if (l === 'outdated') return 'status-badge status-badge--error';
+			if (l === 'disconnected') return 'status-badge status-badge--muted';
+			if (l === 'unlinked') return 'status-badge status-badge--warn';
+			if (l === 'no work') return 'status-badge status-badge--warn';
+			if (l === 'loading...') return 'status-badge status-badge--muted';
+			if (l === 'warning') return 'status-badge status-badge--warn';
+			return 'status-badge status-badge--muted';
+		},
+	},
+};
 </script>
 
 <template lang="pug">
@@ -127,9 +165,8 @@ export default {
 
     .machine-resources(v-if="one_group && !outdated",
       :title="mach.get_resources()") {{mach.get_resources('', 50)}}
-
-    .machine-status
-      span(v-for="t in status", :title="t[1]", v-html="t[0]")
+    .machine-status 
+      span(v-for="t in status", :class="status_badge_class(t[0])",:title="t[1]") {{t[0]}}
 
     .machine-actions(v-if="!outdated")
       Button.button-icon(:route="mach.get_url('/settings')",
@@ -203,10 +240,30 @@ export default {
     .machine-status
       flex 1
       color var(--warn-color)
-      font-weight bold
       display flex
       gap var(--gap)
       justify-content end
+    .status-badge
+    display inline-flex
+    align-items center
+    font-size 11px
+    font-weight 500
+    padding 2px 7px
+    border-radius var(--border-radius)
+    white-space nowrap
+
+    &--muted
+      background var(--table-header-bg)
+      color var(--subtitle-color)
+
+    &--warn
+      background var(--warn-color)
+      color var(--body-bg)
+      opacity 0.9
+
+    &--error
+      background var(--error-color)
+      color var(--body-bg)
 
     .machine-actions
       display flex

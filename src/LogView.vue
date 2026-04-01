@@ -65,6 +65,9 @@ export default {
 	},
 
 	computed: {
+		match_count() {
+			return this.lines.length;
+		},
 		count() {
 			return this.lines.length;
 		},
@@ -258,6 +261,9 @@ export default {
     .view-panel.log-controls
       label Search
       input(v-model="search", type="text", placeholder="Search in log...")
+      span.badge(v-if="search || errors || warnings", 
+      :class="count < log.length ? 'badge-warn' : 'badge-muted'")| {{count}} of {{log.length}} lines
+      
       label(title="Filter log for error messages").
         #[input(v-model="errors", type="checkbox")] Errors
       label(title="Filter log for warning messages").
