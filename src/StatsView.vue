@@ -27,183 +27,354 @@
 -->
 
 <script>
-
-
 export default {
-  name: 'StatsView',
+	name: 'StatsView',
 
+	computed: {
+		stats() {
+			return this.$stats.get_data();
+		},
+		team() {
+			return this.$stats.get_team();
+		},
+		is_anon() {
+			return this.$stats.is_anon();
+		},
+		uid() {
+			return this.stats.id;
+		},
 
-  computed: {
-    stats()      {return this.$stats.get_data()},
-    team()       {return this.$stats.get_team()},
-    is_anon()    {return this.$stats.is_anon()},
-    uid()        {return this.stats.id},
+		team_owner() {
+			for (let team of this.$adata.teams || [])
+				if (team.team == this.team.team) return true;
+			return false;
+		},
 
+		// UI Logic for milestones
+		userProgress() {
+			const rank = this.stats.rank || 1000000;
+			const next = this.nextMilestoneValue(rank);
+			const prev = this.prevMilestoneValue(rank);
+			const totalRange = prev - next;
+			const currentProgress = prev - rank;
+			return Math.min(
+				100,
+				Math.max(0, (currentProgress / totalRange) * 100),
+			).toFixed(1);
+		},
+	},
 
-    team_owner() {
-      for (let team of this.$adata.teams || [])
-        if (team.team == this.team.team) return true
-      return false
-    }
-  },
-
-
-  methods: {
-    top(rank) {
-      rank = rank == undefined ? 1000001 : rank
-
-      for (let i = 2; i < 7; i++) {
-        let level = Math.pow(10, i)
-        if (rank <= level) return this.$util.human_number(level, 0)
-      }
-    },
-
-
-    tpercent(user, team) {
-      if (!team) return '0.0%'
-      return (user / team * 100).toFixed(1) + '%'
-    }
-  }
-}
+	methods: {
+		nextMilestoneValue(rank) {
+			if (rank <= 100) return 10;
+			if (rank <= 1000) return 100;
+			if (rank <= 10000) return 1000;
+			if (rank <= 100000) return 10000;
+			return 100000;
+		},
+		prevMilestoneValue(rank) {
+			if (rank <= 100) return 100;
+			if (rank <= 1000) return 1000;
+			if (rank <= 10000) return 10000;
+			if (rank <= 100000) return 100000;
+			return 1000000;
+		},
+		top(rank) {
+			rank = rank == undefined ? 1000001 : rank;
+			for (let i = 2; i < 7; i++) {
+				let level = Math.pow(10, i);
+				if (rank <= level) return this.$util.human_number(level, 0);
+			}
+		},
+		tpercent(user, team) {
+			if (!team) return '0.0%';
+			return ((user / team) * 100).toFixed(1) + '%';
+		},
+	},
+};
 </script>
 
 <template lang="pug">
 .stats-view.page-view
   MainHeader
 
-  .view-body(v-if="stats.id")
-    .view-panel(v-if="stats.name")
-      .user-header
-        .user-avatar.fa.fa-user-o
-        .user-name(:title="stats.name")
-          a(v-if="stats.id", :href="$stats.url + '/donor/id/' + stats.id",
-            target="_blank") {{stats.name}}
-          span(v-else-if="stats.name") {{stats.name}}
-          span(v-else) Anonymous
+  .view-body
+    .stats-grid
+      // USER STATS CARD
+      .stats-card(v-if="stats.id")
+        .card-header
+          .avatar-container
+            .fa.fa-user-circle.user-avatar-icon
+          .user-info
+            .user-name-row
+              a(v-if="stats.id", :href="$stats.url + '/donor/id/' + stats.id", target="_blank") {{stats.name}}
+              span(v-else) Anonymous
+            .user-badge(v-if="stats.rank") 
+              i.fa.fa-trophy
+              |  Rank # {{stats.rank.toLocaleString()}}
 
-        .user-rank(v-if="stats.rank") Rank {{stats.rank.toLocaleString()}}
+        .milestone-section
+          .milestone-label
+            span Next Goal: Top {{nextMilestoneValue(stats.rank || 1000000).toLocaleString()}}
+            span {{userProgress}}%
+          ProgressBar(:progress="userProgress")
 
-      .user-top(v-if="top(stats.rank)") Top {{top(stats.rank)}} Ranked Donor
-      .user-top(v-else) Unranked Ranked Donor
+        .main-stats-grid
+          .stat-box
+            .stat-value {{ (stats.score || 0).toLocaleString() }}
+            .stat-label Total Points
+          .stat-box
+            .stat-value {{ (stats.wus || 0).toLocaleString() }}
+            .stat-label WUs Completed
 
-      .user-points {{(stats.score || 0).toLocaleString()}} points earned
-      .user-wus {{(stats.wus || 0).toLocaleString()}} WUs completed
+        .activity-section
+          h3 Client Activity
+          .activity-row
+            .activity-item
+              span.dot.active
+              span 7 Days: 
+              strong {{ stats.active_7 }}
+            .activity-item
+              span.dot
+              span 50 Days: 
+              strong {{ stats.active_50 }}
 
-      h2 Active Clients
-      .active-7 {{stats.active_7}} active clients within 7 days
-      .active-50 {{stats.active_50}} active clients within 50 days
+        .awards-section
+          h3 Achievement Awards
+          .awards-flex
+            Award(title="WUs", :user="uid", wus, :disabled="!stats.wus")
+            Award(title="Points", :user="uid", :disabled="!stats.wus")
 
-      h2 Awards
-      .user-awards
-        Award.user-wus-award(
-          title="WUs Award", :user="uid", wus, :disabled="!stats.wus")
-        Award.user-points-award(title="Points Award", :user="uid",
-          :disabled="!stats.wus")
+      .stats-card.no-info(v-else-if="is_anon")
+        i.fa.fa-user-secret
+        p Folding Anonymously
+        small Join the community by creating an account!
 
-    .view-panel.no-info(v-else) Folding anonymously
+      // TEAM STATS CARD
+      .stats-card(v-if="team.team")
+        .card-header
+          .avatar-container
+            img.team-logo(v-if="team.logo", :src="team.logo")
+            .fa.fa-users.team-avatar-icon(v-else)
+          .user-info
+            .user-name-row
+              a(:href="$stats.url + '/team/' + team.team", target="_blank") {{team.name}}
+              Button.button-icon(v-if="team_owner", icon="pencil", title="Edit team", route="/account/teams")
+            .user-badge.team-badge(v-if="team.trank") 
+              i.fa.fa-globe
+              |  World Rank # {{team.trank.toLocaleString()}}
 
-    .view-panel(v-if="team.team")
-      .team-header
-        img.team-logo(v-if="team.logo", :src="team.logo")
-        .team-logo.fa.fa-users(v-else)
-        .team-name(:title="team.name")
-          a(:href="$stats.url + '/team/' + team.team", target="_blank")
-            | {{team.name}}
-          Button.button-icon(v-if="team_owner", icon="pencil",
-            title="Edit team settings.", route="/account/teams")
-        .team-rank(v-if="team.trank") Rank {{team.trank.toLocaleString()}}
+        .milestone-section
+          .milestone-label
+            span Team Contribution
+            span {{ tpercent(team.score, team.tscore) }}
+          ProgressBar(:progress="parseFloat(tpercent(team.score, team.tscore))")
 
-      .team-top(v-if="top(team.trank)") Top {{top(team.trank)}} Ranked Team
-      .team-top(v-else) Unranked Team
+        .main-stats-grid
+          .stat-box
+            .stat-value {{ (team.tscore || 0).toLocaleString() }}
+            .stat-label Team Points
+          .stat-box
+            .stat-value {{ (team.score || 0).toLocaleString() }}
+            .stat-label Your Share
 
-      .team-points {{(team.tscore || 0).toLocaleString()}} points earned
-      .team-wus {{(team.twus || 0).toLocaleString()}} WUs completed
+        .activity-section
+          h3 Contribution Details
+          .contribution-data
+            p You have contributed 
+              strong {{ (team.wus || 0).toLocaleString() }} 
+              | Work Units to this team.
 
-      h2 Your Contribution
-      .contrib-points.
-        {{(team.score || 0).toLocaleString()}} points
-        ({{tpercent(team.score, team.tscore)}})
+        .awards-section
+          h3 Team Honors
+          .awards-flex
+            Award(title="Team WUs", :team="team.team", wus, :disabled="!team.twus")
+            Award(title="Team Points", :team="team.team", :disabled="!team.tscore")
 
-      .contrib-wus.
-        {{(team.wus || 0).toLocaleString()}} WUs
-        ({{tpercent(team.wus, team.twus)}})
+      .stats-card.no-info(v-else)
+        i.fa.fa-flag-o
+        p No Team Selected
+        small Teamwork makes the folding dream work!
 
-      h2 Awards
-      .team-awards
-        Award.team-wus-award(
-        title="WUs Award", :team="team.team", wus, :disabled="!team.twus")
-        Award.team-points-award(title="Points Award", :team="team.team",
-         :disabled="!team.tscore")
-
-    .view-panel.no-info(v-else) No team selected
 </template>
 
 <style lang="stylus">
 .stats-view
   .view-body
-    flex-direction row
-    flex-wrap wrap
-    justify-content center
+    padding var(--gap)
+    background var(--body-bg)
 
-    > *
-      flex 1
-      max-width calc(50% - var(--gap) / 2)
-      display flex
-      flex-direction column
-      gap calc(var(--gap) / 2)
+  .stats-grid
+    display grid
+    grid-template-columns repeat(auto-fit, minmax(400px, 1fr))
+    gap calc(var(--gap) * 2)
+    width 100%
+    max-width 1200px
+    margin 0 auto
 
-    .user-header, .team-header
-      display flex
-      gap var(--gap)
-      flex-direction row
-      align-items center
-
-      > *
-        white-space nowrap
-
-      .user-rank, .team-rank
-        flex 1
-        text-align right
-
-    .user-name, .team-name
-      display flex
-      gap calc(var(--gap) / 2)
-      font-size 150%
-      width 18em
-      overflow hidden
-      text-overflow ellipsis
-
-      .fa
-        font-size 75%
-
-    .user-avatar, .team-logo
-      display flex
-      justify-content center
-      align-items center
-      height 48px
-      min-width 48px
-      max-width 128px
-      font-size 40px
-
-    .user-top, .team-top
-      padding var(--gap)
-      margin var(--gap) calc(var(--gap) * -1.2) var(--gap) \
-        calc(var(--gap) * -1.5)
-      white-space nowrap
-      background var(--success-color)
-      color #fff
-
-  .user-awards, .team-awards
+  .stats-card
+    background var(--panel-bg)
+    border var(--border)
+    border-radius 12px
+    padding calc(var(--gap) * 1.5)
+    box-shadow var(--shadow)
+    transition transform 0.2s ease, box-shadow 0.2s ease
     display flex
+    flex-direction column
     gap var(--gap)
 
-  .no-info
+    &:hover
+      transform translateY(-2px)
+      box-shadow 0 8px 24px rgba(0,0,0,0.15)
+
+    &.no-info
+      justify-content center
+      align-items center
+      text-align center
+      color var(--subtitle-color)
+      min-height 300px
+      i
+        font-size 4rem
+        margin-bottom 1rem
+        opacity 0.5
+      p
+        font-size 1.5rem
+        font-weight bold
+        margin 0
+
+  .card-header
     display flex
     align-items center
-    justify-content center
-    font-size 140%
+    gap var(--gap)
+    border-bottom 1px solid var(--border-color)
+    padding-bottom var(--gap)
 
-@media (max-width 60em)
-  .stats-view .view-body > *
-    max-width 100vw
+  .avatar-container
+    width 64px
+    height 64px
+    background var(--table-header-bg)
+    border-radius 50%
+    display flex
+    justify-content center
+    align-items center
+    overflow hidden
+    border 2px solid var(--link-color)
+
+    .user-avatar-icon, .team-avatar-icon
+      font-size 2rem
+      color var(--link-color)
+
+    .team-logo
+      width 100%
+      height 100%
+      object-fit cover
+
+  .user-info
+    flex 1
+    display flex
+    flex-direction column
+    overflow hidden
+
+  .user-name-row
+    display flex
+    align-items center
+    gap 0.5rem
+    a
+      font-size 1.5rem
+      font-weight bold
+      color var(--title-color)
+      text-decoration none
+      white-space nowrap
+      overflow hidden
+      text-overflow ellipsis
+      &:hover
+        color var(--link-color)
+
+  .user-badge
+    background var(--link-color)
+    color white
+    padding 2px 10px
+    border-radius 20px
+    font-size 0.8rem
+    width fit-content
+    margin-top 4px
+    &.team-badge
+      background var(--success-color)
+
+  .milestone-section
+    margin var(--gap) 0
+
+    .milestone-label
+      display flex
+      justify-content space-between
+      font-size 0.9rem
+      margin-bottom 5px
+      color var(--subtitle-color)
+      font-weight bold
+
+  .main-stats-grid
+    display grid
+    grid-template-columns 1fr 1fr
+    gap var(--gap)
+    margin var(--gap) 0
+
+    .stat-box
+      background var(--table-odd)
+      padding var(--gap)
+      border-radius 8px
+      text-align center
+      border 1px solid var(--border-color)
+
+      .stat-value
+        font-size 1.8rem
+        font-weight 800
+        color var(--link-color)
+        font-family var(--mono-font)
+
+      .stat-label
+        font-size 0.75rem
+        text-transform uppercase
+        letter-spacing 1px
+        color var(--subtitle-color)
+
+  .activity-section
+    h3
+      font-size 1rem
+      margin 0 0 0.5rem 0
+      color var(--title-color)
+
+    .activity-row
+      display flex
+      gap var(--gap)
+
+    .activity-item
+      font-size 0.9rem
+      display flex
+      align-items center
+      gap 5px
+
+      .dot
+        width 8px
+        height 8px
+        border-radius 50%
+        background #666
+        &.active
+          background var(--success-color)
+          box-shadow 0 0 8px var(--success-color)
+
+  .awards-section
+    border-top 1px solid var(--border-color)
+    padding-top var(--gap)
+    h3
+      font-size 1rem
+      margin 0 0 1rem 0
+
+    .awards-flex
+      display flex
+      gap calc(var(--gap) / 2)
+      flex-wrap wrap
+
+@media (max-width 600px)
+  .stats-grid
+    grid-template-columns 1fr
 </style>
