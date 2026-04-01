@@ -34,10 +34,9 @@ export default {
 	data() {
 		return {
 			search: '',
-			errors: false,
-			warnings: false,
+			log_level: 'all', // Replaces individual errors/warnings booleans
 			follow: true,
-			line_height: 20, // Fallback default
+			line_height: 20,
 			view_height: 0,
 			scroll_percent: 0,
 			log_top: 0,
@@ -50,7 +49,6 @@ export default {
 
 	watch: {
 		count() {
-			// Use nextTick to allow DOM update before calculating scroll end
 			this.$nextTick(() => {
 				if (this.follow) this.scroll_to_end();
 				else this.update_scroll();
@@ -62,67 +60,102 @@ export default {
 		query(newQuery) {
 			if (newQuery !== undefined) this.search = newQuery;
 		},
+		log_level() {
+			this.$nextTick(() => {
+				if (this.follow) this.scroll_to_end();
+				else this.update_scroll();
+			});
+		},
 	},
 
 	computed: {
-		match_count() {
-			return this.lines.length;
-		},
-		count() {
-			return this.lines.length;
-		},
-
-		visible_lines() {
-			return this.lines
-				.slice(this.start, this.end)
-				.map((line) => [line[0], this.$util.ansi2html(line[1])]);
-		},
-
 		log() {
 			let log = this.mach.get_data().log || [];
 			return log.map((line, index) => [index, line]);
 		},
 
-		line_filter() {
-			let searchExp = null;
-			if (this.search) {
-				// Safely escape user input for Regex
-				const escapedSearch = this.search.replace(
-					/[.*+?^${}()|[\]\\]/g,
-					'\\$&',
-				);
-				searchExp = new RegExp(escapedSearch, 'i');
-			}
+		lines() {
+			if (this.log_level === 'all') return this.log;
 
-			let errWarnExp = null;
-			if (this.errors || this.warnings) {
-				errWarnExp = new RegExp(
-					':[' +
-						(this.errors ? 'E' : '') +
-						(this.warnings ? 'W' : '') +
-						'] :',
-				);
-			}
+			const errExp = /(:E\s*:|ERROR:?)/i;
+			const warnExp = /(:W\s*:|WARNING:?)/i;
 
-			return (lineText) => {
-				if (searchExp && !searchExp.test(lineText)) return false;
-				if (errWarnExp && !errWarnExp.test(lineText)) return false;
+			return this.log.filter((line) => {
+				if (this.log_level === 'error') return errExp.test(line[1]);
+				if (this.log_level === 'warn')
+					return errExp.test(line[1]) || warnExp.test(line[1]);
 				return true;
-			};
+			});
 		},
 
-		lines() {
-			if (!this.search && !this.errors && !this.warnings) return this.log;
-			return this.log.filter((line) => this.line_filter(line[1]));
+		analyzed_log() {
+			// Evaluates the current timeline for minimap plotting (Search marks, Errors, Warnings)
+			const marks = [];
+			let searchCount = 0;
+			const searchExp = this.search
+				? new RegExp(
+						this.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+						'i',
+					)
+				: null;
+			const total = this.lines.length;
+
+			if (total === 0) return { marks, searchCount };
+
+			for (let i = 0; i < total; i++) {
+				const line = this.lines[i][1];
+				let isSearchMatch = searchExp && searchExp.test(line);
+
+				if (isSearchMatch) {
+					searchCount++;
+					marks.push({
+						top: (i / total) * 100,
+						type: 'search',
+						index: i,
+					});
+				} else if (!this.search) {
+					// Highlight timeline warnings/errors if no specific search query is active
+					if (/(:E\s*:|ERROR:?)/i.test(line)) {
+						marks.push({
+							top: (i / total) * 100,
+							type: 'error',
+							index: i,
+						});
+					} else if (/(:W\s*:|WARNING:?)/i.test(line)) {
+						marks.push({
+							top: (i / total) * 100,
+							type: 'warn',
+							index: i,
+						});
+					}
+				}
+			}
+
+			// Optimization cap: limit minimap div nodes if logs are extremely massive
+			let finalMarks = marks;
+			if (marks.length > 1000) {
+				const step = Math.ceil(marks.length / 1000);
+				finalMarks = marks.filter((_, idx) => idx % step === 0);
+			}
+
+			return { marks: finalMarks, searchCount };
+		},
+
+		minimap_marks() {
+			return this.analyzed_log.marks;
+		},
+		search_match_count() {
+			return this.analyzed_log.searchCount;
+		},
+		count() {
+			return this.lines.length;
 		},
 
 		start() {
-			// Buffer a few lines above for smoother scrolling
 			return Math.max(0, this.top_line - 5);
 		},
 
 		end() {
-			// Buffer lines below to prevent white space while scrolling fast
 			return Math.min(this.count, this.top_line + this.view_lines + 10);
 		},
 
@@ -139,24 +172,26 @@ export default {
 		content_offset() {
 			return this.start * this.line_height;
 		},
+
+		visible_lines() {
+			// format_line handles ANSI replacement and Semantic highlighting right on render limits
+			return this.lines
+				.slice(this.start, this.end)
+				.map((line) => [line[0], this.format_line(line[1])]);
+		},
 	},
 
 	mounted() {
 		this.search = this.query || '';
 		this.mach.log_enable(true);
-
 		this.calculate_dimensions();
 
-		// Observe resizing dynamically
 		this.resizeObserver = new ResizeObserver(() => {
 			this.calculate_dimensions();
 			this.update_scroll();
 		});
 
-		if (this.$refs.log) {
-			this.resizeObserver.observe(this.$refs.log);
-		}
-
+		if (this.$refs.log) this.resizeObserver.observe(this.$refs.log);
 		this.update();
 	},
 
@@ -168,13 +203,93 @@ export default {
 	},
 
 	methods: {
+		format_line(text) {
+			// 1. Strip ANSI codes
+			let clean = text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+
+			// 2. Escape standard HTML to prevent injection
+			let html = clean
+				.replace(/&/g, '&amp;')
+				.replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;');
+
+			// 3. Apply FAH semantic highlighting
+			// -> Timestamps
+			html = html.replace(
+				/\b(\d{2}:\d{2}:\d{2})\b/g,
+				'<span class="hl-time">$1</span>',
+			);
+			// -> PRCG / Project Details
+			html = html.replace(
+				/(Project:?\s*\d+)/gi,
+				'<span class="hl-project">$1</span>',
+			);
+			html = html.replace(
+				/\b(Run\s*\d+,\s*Clone\s*\d+,\s*Gen\s*\d+)\b/gi,
+				'<span class="hl-project">$1</span>',
+			);
+			html = html.replace(
+				/\b(PRCG\s*\d+,\d+,\d+,\d+)\b/gi,
+				'<span class="hl-project">$1</span>',
+			);
+			// -> Work Units & Slots
+			html = html.replace(
+				/\b((?:FS|WU)\d{2})\b/g,
+				'<span class="hl-fah">$1</span>',
+			);
+			// -> Errors & Warnings
+			html = html.replace(
+				/(:E\s*:|ERROR:?)/gi,
+				'<span class="hl-error">$&</span>',
+			);
+			html = html.replace(
+				/(:W\s*:|WARNING:?)/gi,
+				'<span class="hl-warning">$&</span>',
+			);
+
+			// 4. Dynamic Search Highlighting (Only wrap outside of semantic HTML tags)
+			if (this.search) {
+				const escapedSearch = this.search.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					'\\$&',
+				);
+				const searchExp = new RegExp(`(${escapedSearch})`, 'ig');
+
+				const parts = html.split(/(<[^>]+>)/);
+				for (let i = 0; i < parts.length; i++) {
+					if (!parts[i].startsWith('<')) {
+						parts[i] = parts[i].replace(
+							searchExp,
+							'<mark>$1</mark>',
+						);
+					}
+				}
+				html = parts.join('');
+			}
+
+			return html;
+		},
+
+		on_minimap_click(e) {
+			const rect = e.currentTarget.getBoundingClientRect();
+			const percent = Math.max(
+				0,
+				Math.min(1, (e.clientY - rect.top) / rect.height),
+			);
+			const targetIndex = Math.floor(percent * this.lines.length);
+			const log = this.$refs.log;
+
+			if (log) {
+				log.scrollTop = targetIndex * this.line_height;
+				this.follow = false;
+			}
+		},
+
 		calculate_dimensions() {
 			let log = this.$refs.log;
 			if (!log) return;
-
 			this.view_height = log.clientHeight;
 
-			// Compute actual line-height
 			let e = document.createElement('div');
 			e.className = 'log-line';
 			e.innerHTML = '&nbsp;';
@@ -187,7 +302,7 @@ export default {
 
 		reset() {
 			this.search = '';
-			this.errors = this.warnings = false;
+			this.log_level = 'all';
 		},
 
 		update() {
@@ -212,7 +327,6 @@ export default {
 			this.log_top = log.scrollTop;
 			const maxScroll = Math.max(0, log.scrollHeight - log.clientHeight);
 
-			// Snap to follow if within 10px of bottom (handles floating point/zoom rounding errors)
 			if (maxScroll > 0) {
 				this.follow = maxScroll - this.log_top <= 10;
 			}
@@ -224,7 +338,6 @@ export default {
 					? Math.floor((this.log_top / maxScroll) * 100)
 					: 100;
 
-			// Compute scroll percent for display overlay
 			if (
 				this.scroll_percent !== percent &&
 				!(this.scroll_percent === 0 && percent === 100)
@@ -243,7 +356,6 @@ export default {
 		},
 
 		scroll() {
-			// Use requestAnimationFrame for fluid 60fps virtualization updates
 			if (this.scroll_raf) cancelAnimationFrame(this.scroll_raf);
 			this.scroll_raf = requestAnimationFrame(() => {
 				this.update_scroll();
@@ -261,27 +373,34 @@ export default {
     .view-panel.log-controls
       label Search
       input(v-model="search", type="text", placeholder="Search in log...")
-      span.badge(v-if="search || errors || warnings", 
-      :class="count < log.length ? 'badge-warn' : 'badge-muted'")| {{count}} of {{log.length}} lines
+      span.badge(v-if="search", :class="search_match_count ? 'badge-warn' : 'badge-muted'") {{search_match_count}} matches
+      span.badge.badge-warn(v-else-if="log_level !== 'all'") {{lines.length}} lines
+      span.badge.badge-muted(v-else) {{log.length}} lines
       
-      label(title="Filter log for error messages").
-        #[input(v-model="errors", type="checkbox")] Errors
-      label(title="Filter log for warning messages").
-        #[input(v-model="warnings", type="checkbox")] Warnings
+      label Level
+      select(v-model="log_level")
+        option(value="all") All Levels
+        option(value="warn") Warnings & Errors
+        option(value="error") Errors Only
       
-      Button.button-icon(title="Reset search", icon="repeat", @click="reset", :disabled="!search && !errors && !warnings")
+      Button.button-icon(title="Reset filters", icon="repeat", @click="reset", :disabled="!search && log_level === 'all'")
       Button.button-icon(title="Auto-scroll to latest log entries", :icon="follow ? 'toggle-down' : 'pause'", @click="follow = !follow", :class="{ 'active-follow': follow }")
 
     .log-percent.fade-out(ref="percent")
       div {{scroll_percent}}%
 
-    .view-panel.log(@scroll="scroll", ref="log")
-      .log-line(v-if="!log.length") Loading log...
-      .log-line(v-else-if="!count") No matching log lines.
+    .log-container
+      .view-panel.log(@scroll="scroll", ref="log")
+        .log-line(v-if="!log.length") Loading log...
+        .log-line(v-else-if="!count") No matching log lines.
 
-      .log-wrapper(v-else, ref="wrap", :style="{height: wrapper_height + 'px'}")
-        .log-content(:style="{'padding-top': content_offset + 'px'}")
-          .log-line(v-for="line in visible_lines", :key="line[0]", v-html="line[1]")
+        .log-wrapper(v-else, ref="wrap", :style="{height: wrapper_height + 'px'}")
+          .log-content(:style="{'padding-top': content_offset + 'px'}")
+            .log-line(v-for="line in visible_lines", :key="line[0]", v-html="line[1]")
+      
+      .minimap(v-if="minimap_marks.length", @click="on_minimap_click", title="Click to jump to point in timeline")
+        .minimap-mark(v-for="(mark, i) in minimap_marks", :key="i", :class="'type-' + mark.type", :style="{top: mark.top + '%'}")
+
 </template>
 
 <style lang="stylus">
@@ -289,6 +408,8 @@ export default {
   .view-body
     position relative
     font-family var(--mono-font)
+    display flex
+    flex-direction column
 
     .view-panel
       color var(--log-fg)
@@ -299,9 +420,12 @@ export default {
       flex-wrap wrap
       gap var(--gap)
       align-items center
+      margin-bottom var(--gap)
 
       input[type=text]
         flex 1
+      select
+        padding 4px 8px
 
       .active-follow
         color var(--link-color)
@@ -317,17 +441,76 @@ export default {
       opacity 1
       pointer-events none
       color var(--panel-fg)
+      z-index 50
 
       &.fade-out
         opacity 0
         transition opacity 1s linear
 
-    .log.view-panel
+    .log-container
+      position relative
       flex 1
-      overflow auto
-      padding var(--gap)
-      will-change scroll-position
+      display flex
+      min-height 0
+      overflow hidden
 
-      .log-line
-        white-space nowrap
+      .log.view-panel
+        flex 1
+        overflow-y auto
+        padding var(--gap)
+        padding-right 24px /* Provide clearance so text doesn't overlap the minimap */
+        will-change scroll-position
+
+        .log-line
+          white-space nowrap
+
+      .minimap
+        position absolute
+        right 18px /* Slightly offset to not interrupt standard browser scrollbars */
+        top 0
+        bottom 0
+        width 12px
+        background rgba(128, 128, 128, 0.1)
+        border-radius 4px
+        z-index 10
+        cursor pointer
+        transition background 0.2s ease
+
+        &:hover
+            background rgba(128, 128, 128, 0.25)
+
+        .minimap-mark
+          position absolute
+          left 0
+          right 0
+          height 3px
+          opacity 0.8
+          &.type-search
+            background-color var(--hl-search-bg, #ffeb3b)
+            z-index 3
+          &.type-error
+            background-color var(--hl-error-fg, #f44336)
+            z-index 2
+          &.type-warn
+            background-color var(--hl-warning-fg, #ff9800)
+            z-index 1
+
+/* Semantic HTML Highlighting Overrides */
+.hl-time
+  color var(--hl-time-fg, #888)
+.hl-project
+  color var(--hl-project-fg, #4caf50)
+  font-weight bold
+.hl-fah
+  color var(--hl-fah-fg, #2196f3)
+.hl-error
+  color var(--hl-error-fg, #f44336)
+  font-weight bold
+.hl-warning
+  color var(--hl-warning-fg, #ff9800)
+  font-weight bold
+mark
+  background-color var(--hl-search-bg, rgba(255, 235, 59, 0.4))
+  color inherit
+  border-radius 2px
 </style>
